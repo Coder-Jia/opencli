@@ -1,4 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { PlaywrightMCP, __test__ } from './browser/index.js';
 
 afterEach(() => {
@@ -247,6 +249,27 @@ describe('browser helpers', () => {
         configurable: true,
       });
     }
+  });
+
+  it('ignores non-server playwright cli paths discovered from fallback scans', () => {
+    const wrongCli = '/root/.npm/_npx/e41f203b7505f1fb/node_modules/playwright/lib/mcp/terminal/cli.js';
+    const npxCacheBase = path.join(os.homedir(), '.npm', '_npx');
+
+    const existsSync = vi.fn((candidate: any) => {
+      const value = String(candidate);
+      return value === npxCacheBase || value === wrongCli;
+    });
+
+    const execSync = vi.fn((command: string) => {
+      if (String(command).includes('npm root -g')) return '/missing/global/node_modules\n' as any;
+      if (String(command).includes('--package=@playwright/mcp which mcp-server-playwright')) return `${wrongCli}\n` as any;
+      if (String(command).includes('which mcp-server-playwright')) return '' as any;
+      if (String(command).includes(`find "${npxCacheBase}"`)) return `${wrongCli}\n` as any;
+      throw new Error(`unexpected command: ${String(command)}`);
+    });
+    __test__.setMcpDiscoveryTestHooks({ existsSync, execSync: execSync as any });
+
+    expect(__test__.findMcpServerPath()).toBeNull();
   });
 });
 

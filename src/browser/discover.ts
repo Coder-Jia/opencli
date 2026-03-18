@@ -12,6 +12,19 @@ let _cachedMcpServerPath: string | null | undefined;
 let _existsSync = fs.existsSync;
 let _execSync = execSync;
 
+function isSupportedMcpEntrypoint(candidate: string): boolean {
+  const normalized = candidate.replace(/\\/g, '/').toLowerCase();
+  return normalized.endsWith('/@playwright/mcp/cli.js') ||
+    normalized.endsWith('/mcp-server-playwright') ||
+    normalized.endsWith('/mcp-server-playwright.js');
+}
+
+function resolveSupportedMcpPath(candidate: string | null | undefined): string | null {
+  const trimmed = candidate?.trim();
+  if (!trimmed || !_existsSync(trimmed)) return null;
+  return isSupportedMcpEntrypoint(trimmed) ? trimmed : null;
+}
+
 export function resetMcpServerPathCache(): void {
   _cachedMcpServerPath = undefined;
 }
@@ -80,8 +93,9 @@ export function findMcpServerPath(): string | null {
   // Try npx resolution (legacy package name)
   try {
     const result = _execSync('npx -y --package=@playwright/mcp which mcp-server-playwright 2>/dev/null', { encoding: 'utf-8', timeout: 10000 }).trim();
-    if (result && _existsSync(result)) {
-      _cachedMcpServerPath = result;
+    const resolved = resolveSupportedMcpPath(result);
+    if (resolved) {
+      _cachedMcpServerPath = resolved;
       return _cachedMcpServerPath;
     }
   } catch {}
@@ -89,8 +103,9 @@ export function findMcpServerPath(): string | null {
   // Try which
   try {
     const result = _execSync('which mcp-server-playwright 2>/dev/null', { encoding: 'utf-8', timeout: 5000 }).trim();
-    if (result && _existsSync(result)) {
-      _cachedMcpServerPath = result;
+    const resolved = resolveSupportedMcpPath(result);
+    if (resolved) {
+      _cachedMcpServerPath = resolved;
       return _cachedMcpServerPath;
     }
   } catch {}
@@ -99,9 +114,10 @@ export function findMcpServerPath(): string | null {
   for (const base of candidates) {
     if (!_existsSync(base)) continue;
     try {
-      const found = _execSync(`find "${base}" -name "cli.js" -path "*playwright*mcp*" 2>/dev/null | head -1`, { encoding: 'utf-8', timeout: 5000 }).trim();
-      if (found) {
-        _cachedMcpServerPath = found;
+      const found = _execSync(`find "${base}" -type f -path "*/@playwright/mcp/cli.js" 2>/dev/null | head -1`, { encoding: 'utf-8', timeout: 5000 }).trim();
+      const resolved = resolveSupportedMcpPath(found);
+      if (resolved) {
+        _cachedMcpServerPath = resolved;
         return _cachedMcpServerPath;
       }
     } catch {}
