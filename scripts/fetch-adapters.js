@@ -87,8 +87,9 @@ export function fetchAdapters() {
   const currentVersion = getPackageVersion();
   const oldManifest = readManifest();
 
-  // Skip if already installed at the same version
-  if (currentVersion !== 'unknown' && oldManifest?.version === currentVersion) {
+  // Skip if already installed at the same version (unless forced via OPENCLI_FETCH=1)
+  const isForced = process.env.OPENCLI_FETCH === '1';
+  if (!isForced && currentVersion !== 'unknown' && oldManifest?.version === currentVersion) {
     log(`Adapters already up to date (v${currentVersion})`);
     return;
   }
