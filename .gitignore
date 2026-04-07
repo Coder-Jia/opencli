@@ -24,3 +24,5 @@ docs/.vitepress/cache
 *.db
 autoresearch/results/
 autoresearch-results.tsv
+jimeng-output/
+/.gitignore-backup/
