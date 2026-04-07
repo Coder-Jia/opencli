@@ -49,6 +49,8 @@ export interface CliCommand {
   footerExtra?: (kwargs: CommandArgs) => string | undefined;
   requiredEnv?: RequiredEnv[];
   validateArgs?: (kwargs: CommandArgs) => void;
+  /** Prevent concurrent execution — only one instance of this command may run at a time. */
+  exclusive?: boolean;
   /** Deprecation note shown in help / execution warnings. */
   deprecated?: boolean | string;
   /** Preferred replacement command, if any. */
@@ -106,6 +108,7 @@ export function cli(opts: CliOptions): CliCommand {
     timeoutSeconds: opts.timeoutSeconds,
     footerExtra: opts.footerExtra,
     requiredEnv: opts.requiredEnv,
+    exclusive: opts.exclusive,
     deprecated: opts.deprecated,
     replacedBy: opts.replacedBy,
     navigateBefore: opts.navigateBefore,

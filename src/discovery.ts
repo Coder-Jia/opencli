@@ -168,6 +168,7 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
           deprecated: entry.deprecated,
           replacedBy: entry.replacedBy,
           navigateBefore: entry.navigateBefore,
+          exclusive: entry.exclusive,
         };
         registerCommand(cmd);
       } else if (entry.type === 'ts' && entry.modulePath) {
@@ -190,6 +191,7 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
           deprecated: entry.deprecated,
           replacedBy: entry.replacedBy,
           navigateBefore: entry.navigateBefore,
+          exclusive: entry.exclusive,
           _lazy: true,
           _modulePath: modulePath,
         };

@@ -52,6 +52,8 @@ export interface ManifestEntry {
   sourceFile?: string;
   /** Pre-navigation control — see CliCommand.navigateBefore */
   navigateBefore?: boolean | string;
+  /** Prevent concurrent execution */
+  exclusive?: boolean;
 }
 
 import { type YamlCliDefinition, parseYamlArgs } from './yaml-schema.js';
@@ -104,6 +106,7 @@ function toManifestEntry(cmd: CliCommand, modulePath: string, sourceFile?: strin
     modulePath,
     sourceFile,
     navigateBefore: cmd.navigateBefore,
+    exclusive: cmd.exclusive,
   };
 }
 

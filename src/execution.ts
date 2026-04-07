@@ -13,6 +13,9 @@
 import { type CliCommand, type InternalCliCommand, type Arg, type CommandArgs, Strategy, getRegistry, fullName } from './registry.js';
 import type { IPage } from './types.js';
 import { pathToFileURL } from 'node:url';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { executePipeline } from './pipeline/index.js';
 import { AdapterLoadError, ArgumentError, BrowserConnectError, CommandExecutionError, getErrorMessage } from './errors.js';
 import { isDiagnosticEnabled, collectDiagnostic, emitDiagnostic } from './diagnostic.js';
@@ -25,6 +28,48 @@ import { isElectronApp } from './electron-apps.js';
 import { probeCDP, resolveElectronEndpoint } from './launcher.js';
 
 const _loadedModules = new Set<string>();
+
+// ── Exclusive-command locking ──────────────────────────────────────────
+const LOCK_DIR = join(homedir(), '.opencli', 'locks');
+
+function lockPath(cmd: CliCommand): string {
+  return join(LOCK_DIR, `${cmd.site}_${cmd.name}.lock`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function acquireLock(cmd: CliCommand): void {
+  const file = lockPath(cmd);
+  mkdirSync(LOCK_DIR, { recursive: true });
+
+  if (existsSync(file)) {
+    try {
+      const { pid } = JSON.parse(readFileSync(file, 'utf8'));
+      const alive = pid !== process.pid && isProcessAlive(pid);
+      log.debug(`[lock] ${fullName(cmd)}: lock file found, holder PID=${pid}, self=${process.pid}, alive=${alive}`);
+      if (alive) {
+        throw new CommandExecutionError(
+          `${fullName(cmd)} is already running (PID ${pid}). This command does not allow concurrent execution (concurrency limit: 1).`,
+          'Wait for the current execution to finish, or remove the stale lock: rm ' + file,
+        );
+      }
+    } catch (err) {
+      if (err instanceof CommandExecutionError) throw err;
+      // Corrupt lock file — remove it.
+      log.debug(`[lock] ${fullName(cmd)}: corrupt lock file, removing: ${err instanceof Error ? err.message : err}`);
+    }
+    rmSync(file, { force: true });
+  }
+
+  writeFileSync(file, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+  log.debug(`[lock] ${fullName(cmd)}: lock acquired (PID=${process.pid})`);
+}
+
+function releaseLock(cmd: CliCommand): void {
+  try { rmSync(lockPath(cmd), { force: true }); } catch { /* best effort */ }
+}
 
 export function coerceAndValidateArgs(cmdArgs: Arg[], kwargs: CommandArgs): CommandArgs {
   const result: CommandArgs = { ...kwargs };
@@ -153,6 +198,8 @@ export async function executeCommand(
   };
   await emitHook('onBeforeExecute', hookCtx);
 
+  if (cmd.exclusive) acquireLock(cmd);
+
   let result: unknown;
   let diagnosticEmitted = false;
   try {
@@ -243,12 +290,14 @@ export async function executeCommand(
       const ctx = await collectDiagnostic(err, internal, null);
       emitDiagnostic(ctx);
     }
+    if (cmd.exclusive) releaseLock(cmd);
     hookCtx.error = err;
     hookCtx.finishedAt = Date.now();
     await emitHook('onAfterExecute', hookCtx);
     throw err;
   }
 
+  if (cmd.exclusive) releaseLock(cmd);
   hookCtx.finishedAt = Date.now();
   await emitHook('onAfterExecute', hookCtx, result);
   return result;
