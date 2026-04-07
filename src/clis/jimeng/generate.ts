@@ -8,9 +8,9 @@
  * 4. Download images via browser fetch
  */
 
-import { cli, Strategy } from '../../registry.js';
-import { AuthRequiredError } from '../../errors.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { AuthRequiredError } from '@jackwener/opencli/errors';
+import type { IPage } from '@jackwener/opencli/types';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 const JIMENG_IMAGE_URL = 'https://jimeng.jianying.com/ai-tool/generate?type=image&workspace=0';
@@ -61,6 +61,11 @@ cli({
     const prompt = kwargs.prompt as string;
     const waitSec = kwargs.wait as number;
     const outputDir = kwargs.output as string;
+
+    // Unique run ID to avoid overwriting previous runs
+    const runId = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const idx = Math.random().toString(36).substring(2, 6);
+    const runPrefix = `${runId}_${idx}`;
 
     // Navigate to image generation page
     await page.goto(JIMENG_IMAGE_URL);
@@ -339,7 +344,7 @@ cli({
       if (b64.error) continue;
       const buf = Buffer.from(b64.data.split(',')[1], 'base64');
       const ext = (b64.type || 'image/webp').split('/')[1] || 'webp';
-      const fname = `${outputDir}/img_${downloaded.length + 1}.${ext}`;
+      const fname = `${outputDir}/${runPrefix}_img_${downloaded.length + 1}.${ext}`;
       writeFileSync(fname, buf);
       downloaded.push(fname);
     }
