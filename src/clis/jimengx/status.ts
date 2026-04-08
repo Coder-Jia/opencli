@@ -2,7 +2,7 @@
  * Jimeng status — check current video generation progress.
  */
 
-import { cli, Strategy } from '../../registry.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
 import { navigateToGenerate, readProgress } from './utils.js';
 
 cli({

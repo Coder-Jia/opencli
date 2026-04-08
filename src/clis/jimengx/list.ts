@@ -2,7 +2,7 @@
  * Jimeng list — list all video generation records.
  */
 
-import { cli, Strategy } from '../../registry.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
 import { navigateToGenerate, getRecordList } from './utils.js';
 
 cli({

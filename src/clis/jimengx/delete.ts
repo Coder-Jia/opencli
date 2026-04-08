@@ -2,9 +2,9 @@
  * Jimeng delete — delete a specific video generation record.
  */
 
-import { cli, Strategy } from '../../registry.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
 import { navigateToGenerate } from './utils.js';
-import { CommandExecutionError, SelectorError } from '../../errors.js';
+import { CommandExecutionError, SelectorError } from '@jackwener/opencli/errors';
 
 cli({
   site: 'jimeng',

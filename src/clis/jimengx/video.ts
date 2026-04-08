@@ -18,6 +18,8 @@ import {
   readProgress,
   readComboboxes,
   resolveModelName,
+  acquireLock,
+  releaseLock,
 } from './utils.js';
 
 cli({
@@ -28,6 +30,7 @@ cli({
   strategy: Strategy.UI,
   browser: true,
   navigateBefore: false,
+  exclusive: true,
   timeoutSeconds: 120,
   args: [
     {
@@ -64,6 +67,8 @@ cli({
   ],
   columns: ['status', 'model', 'mode', 'ratio', 'duration'],
   func: async (page, kwargs) => {
+    acquireLock();
+    try {
     await navigateToGenerate(page);
 
     // Combobox indices: 0=视频生成, 1=model, 2=mode, 3=duration
@@ -109,5 +114,8 @@ cli({
       ratio: kwargs.ratio,
       duration: `${kwargs.duration}s`,
     }];
+    } finally {
+      releaseLock();
+    }
   },
 });

@@ -2,10 +2,10 @@
  * Jimeng download — download a generated video.
  */
 
-import { cli, Strategy } from '../../registry.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
 import { writeFileSync } from 'node:fs';
 import { navigateToGenerate, getRecordList } from './utils.js';
-import { CommandExecutionError, SelectorError } from '../../errors.js';
+import { CommandExecutionError, SelectorError } from '@jackwener/opencli/errors';
 
 cli({
   site: 'jimeng',

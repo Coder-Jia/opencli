@@ -1,12 +1,75 @@
 /**
  * Jimeng (即梦) shared helpers: login check, combobox interaction,
- * progress monitoring, video URL extraction.
+ * progress monitoring, video URL extraction, concurrency lock.
  */
 
 import type { IPage } from '@jackwener/opencli/types';
-import { AuthRequiredError, SelectorError } from '@jackwener/opencli/errors';
+import { AuthRequiredError, SelectorError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { existsSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execSync } from 'node:child_process';
 
 export const JIMENG_GENERATE_URL = 'https://jimeng.jianying.com/ai-tool/video/generate';
+
+/** File-based lock to ensure only one jimeng task (image or video) runs at a time. */
+const LOCK_FILE = join(tmpdir(), 'opencli-jimeng.lock');
+
+function isProcessAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`tasklist /FI "PID eq ${pid}" /NH /FO CSV`, { timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+      return out.includes(`"${pid}"`);
+    }
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Acquire the jimeng concurrency lock.
+ * Throws CommandExecutionError if another task is already running.
+ * Writes current PID + timestamp to the lock file.
+ */
+export function acquireLock(): void {
+  if (existsSync(LOCK_FILE)) {
+    try {
+      const content = readFileSync(LOCK_FILE, 'utf-8').trim();
+      const [pidStr, tsStr] = content.split('|');
+      const pid = Number(pidStr);
+      const ts = Number(tsStr);
+      const ageSec = (Date.now() - ts) / 1000;
+
+      if (isProcessAlive(pid) && ageSec < 3600) {
+        throw new CommandExecutionError(
+          `Jimeng task already running (PID ${pid}, ${Math.round(ageSec)}s ago). Wait for it to finish.`,
+        );
+      }
+      // Stale lock — remove it
+      unlinkSync(LOCK_FILE);
+    } catch (e: any) {
+      if (e instanceof CommandExecutionError) throw e;
+      // Corrupt lock file — remove it
+      unlinkSync(LOCK_FILE);
+    }
+  }
+  writeFileSync(LOCK_FILE, `${process.pid}|${Date.now()}`);
+}
+
+/** Release the jimeng concurrency lock. */
+export function releaseLock(): void {
+  try {
+    if (existsSync(LOCK_FILE)) {
+      const content = readFileSync(LOCK_FILE, 'utf-8').trim();
+      if (content.startsWith(String(process.pid))) {
+        unlinkSync(LOCK_FILE);
+      }
+    }
+  } catch { /* best effort */ }
+}
 
 /** Model name mapping from CLI arg → display text in combobox */
 const MODEL_DISPLAY: Record<string, string> = {

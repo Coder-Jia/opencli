@@ -19,6 +19,7 @@ import { findPackageRoot, getCliManifestPath } from './package-paths.js';
 
 const PACKAGE_ROOT = findPackageRoot(fileURLToPath(import.meta.url));
 const CLIS_DIR = path.join(PACKAGE_ROOT, 'clis');
+const SRC_CLIS_DIR = path.join(PACKAGE_ROOT, 'src', 'clis');
 const OUTPUT = getCliManifestPath(CLIS_DIR);
 
 export interface ManifestEntry {
@@ -80,10 +81,9 @@ function toTsModulePath(filePath: string, site: string): string {
   return `${site}/${baseName}.js`;
 }
 
-function isCliCommandValue(value: unknown, site: string): value is CliCommand {
+function isCliCommandValue(value: unknown): value is CliCommand {
   return isRecord(value)
     && typeof value.site === 'string'
-    && value.site === site
     && typeof value.name === 'string'
     && Array.isArray(value.args);
 }
@@ -166,13 +166,12 @@ export async function loadTsManifestEntries(
     const mod = await importer(pathToFileURL(filePath).href);
 
     const exportedCommands = Object.values(isRecord(mod) ? mod : {})
-      .filter(value => isCliCommandValue(value, site));
+      .filter(value => isCliCommandValue(value));
 
     const runtimeCommands = exportedCommands.length > 0
       ? exportedCommands
       : [...registry.entries()]
         .filter(([key, cmd]) => {
-          if (cmd.site !== site) return false;
           const previous = before.get(key);
           return !previous || previous !== cmd;
         })
@@ -239,6 +238,34 @@ export async function buildManifest(): Promise<ManifestEntry[]> {
               }
               manifest.set(key, entry);
             }
+          }
+        }
+      }
+    }
+  }
+
+  // Also scan src/clis/ for TS files that have dependencies (utils.ts etc.)
+  // These can't live in clis/ because import paths wouldn't resolve during build.
+  if (fs.existsSync(SRC_CLIS_DIR)) {
+    for (const site of fs.readdirSync(SRC_CLIS_DIR)) {
+      const siteDir = path.join(SRC_CLIS_DIR, site);
+      if (!fs.statSync(siteDir).isDirectory()) continue;
+      // Skip if already found in clis/ as TS (clis/ TS takes priority).
+      // Don't skip just because YAML exists — YAML may cover a different command set.
+      const clisSiteDir = path.join(CLIS_DIR, site);
+      if (fs.existsSync(clisSiteDir) && fs.readdirSync(clisSiteDir).some(f => f.endsWith('.ts') && !f.endsWith('.d.ts'))) continue;
+      for (const file of fs.readdirSync(siteDir)) {
+        if (!file.endsWith('.ts') || file.endsWith('.d.ts') || file.endsWith('.test.ts') || file === 'index.ts') continue;
+        const filePath = path.join(siteDir, file);
+        // Use dist/src/clis/ compiled JS for import (resolves all paths correctly)
+        const compiledPath = path.join(PACKAGE_ROOT, 'dist', 'src', 'clis', site, file.replace(/\.ts$/, '.js'));
+        const importPath = fs.existsSync(compiledPath) ? compiledPath : filePath;
+        const entries = await loadTsManifestEntries(importPath, site);
+        for (const entry of entries) {
+          const key = `${entry.site}/${entry.name}`;
+          const existing = manifest.get(key);
+          if (!existing || shouldReplaceManifestEntry(existing, entry)) {
+            manifest.set(key, entry);
           }
         }
       }

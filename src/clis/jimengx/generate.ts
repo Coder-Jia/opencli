@@ -12,6 +12,7 @@ import { cli, Strategy } from '@jackwener/opencli/registry';
 import { AuthRequiredError } from '@jackwener/opencli/errors';
 import type { IPage } from '@jackwener/opencli/types';
 import { writeFileSync, mkdirSync } from 'node:fs';
+import { acquireLock, releaseLock } from './utils.js';
 
 const JIMENG_IMAGE_URL = 'https://jimeng.jianying.com/ai-tool/generate?type=image&workspace=0';
 
@@ -23,7 +24,6 @@ cli({
   strategy: Strategy.UI,
   browser: true,
   navigateBefore: false,
-  exclusive: true,
   timeoutSeconds: 300,
   args: [
     {
@@ -58,6 +58,8 @@ cli({
   ],
   columns: ['status', 'prompt', 'image_count', 'download_dir'],
   func: async (page: IPage, kwargs) => {
+    acquireLock();
+    try {
     const prompt = kwargs.prompt as string;
     const waitSec = kwargs.wait as number;
     const outputDir = kwargs.output as string;
@@ -355,6 +357,9 @@ cli({
       image_count: downloaded.length,
       download_dir: outputDir,
     }];
+    } finally {
+      releaseLock();
+    }
   },
 });
 
