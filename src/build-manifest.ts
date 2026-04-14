@@ -2,24 +2,23 @@
 /**
  * Build-time CLI manifest compiler.
  *
- * Scans all YAML/TS CLI definitions and pre-compiles them into a single
- * manifest.json for instant cold-start registration (no runtime YAML parsing).
+ * Scans all JS CLI definitions in clis/ and pre-compiles them into a single
+ * manifest.json for instant cold-start registration.
  *
  * Usage: npx tsx src/build-manifest.ts
- * Output: cli-manifest.json at the package root
+ * Output: cli-manifest.json next to clis/
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import yaml from 'js-yaml';
 import { getErrorMessage } from './errors.js';
 import { fullName, getRegistry, type CliCommand } from './registry.js';
 import { findPackageRoot, getCliManifestPath } from './package-paths.js';
 
 const PACKAGE_ROOT = findPackageRoot(fileURLToPath(import.meta.url));
 const CLIS_DIR = path.join(PACKAGE_ROOT, 'clis');
-const SRC_CLIS_DIR = path.join(PACKAGE_ROOT, 'src', 'clis');
+// Write manifest next to clis/ so both dev and installed runtime can find it.
 const OUTPUT = getCliManifestPath(CLIS_DIR);
 
 export interface ManifestEntry {
@@ -45,19 +44,14 @@ export interface ManifestEntry {
   timeout?: number;
   deprecated?: boolean | string;
   replacedBy?: string;
-  /** 'yaml' or 'ts' — determines how executeCommand loads the handler */
-  type: 'yaml' | 'ts';
-  /** Relative path from clis/ dir, e.g. 'bilibili/hot.yaml' or 'bilibili/search.js' */
+  type: 'js';
+  /** Relative path from clis/ dir, e.g. 'bilibili/search.js' */
   modulePath?: string;
-  /** Relative path to the original source file from clis/ dir (for YAML: 'site/cmd.yaml') */
+  /** Relative path to the source file from clis/ dir (e.g. 'site/cmd.js') */
   sourceFile?: string;
   /** Pre-navigation control — see CliCommand.navigateBefore */
   navigateBefore?: boolean | string;
-  /** Prevent concurrent execution */
-  exclusive?: boolean;
 }
-
-import { type YamlCliDefinition, parseYamlArgs } from './yaml-schema.js';
 
 import { isRecord } from './utils.js';
 
@@ -76,14 +70,15 @@ function toManifestArgs(args: CliCommand['args']): ManifestEntry['args'] {
   }));
 }
 
-function toTsModulePath(filePath: string, site: string): string {
+function toModulePath(filePath: string, site: string): string {
   const baseName = path.basename(filePath, path.extname(filePath));
   return `${site}/${baseName}.js`;
 }
 
-function isCliCommandValue(value: unknown): value is CliCommand {
+function isCliCommandValue(value: unknown, site: string): value is CliCommand {
   return isRecord(value)
     && typeof value.site === 'string'
+    && value.site === site
     && typeof value.name === 'string'
     && Array.isArray(value.args);
 }
@@ -102,54 +97,14 @@ function toManifestEntry(cmd: CliCommand, modulePath: string, sourceFile?: strin
     timeout: cmd.timeoutSeconds,
     deprecated: cmd.deprecated,
     replacedBy: cmd.replacedBy,
-    type: 'ts',
+    type: 'js',
     modulePath,
     sourceFile,
     navigateBefore: cmd.navigateBefore,
-    exclusive: cmd.exclusive,
   };
 }
 
-function scanYaml(filePath: string, site: string): ManifestEntry | null {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const def = yaml.load(raw) as YamlCliDefinition | null;
-    if (!isRecord(def)) return null;
-    const cliDef = def as YamlCliDefinition;
-
-    const strategyStr = cliDef.strategy ?? (cliDef.browser === false ? 'public' : 'cookie');
-    const strategy = strategyStr.toUpperCase();
-    const browser = cliDef.browser ?? (strategy !== 'PUBLIC');
-
-    const args = parseYamlArgs(cliDef.args);
-
-    return {
-      site: cliDef.site ?? site,
-      name: cliDef.name ?? path.basename(filePath, path.extname(filePath)),
-      description: cliDef.description ?? '',
-      domain: cliDef.domain,
-      strategy: strategy.toLowerCase(),
-      browser,
-      aliases: isRecord(cliDef) && Array.isArray((cliDef as Record<string, unknown>).aliases)
-        ? ((cliDef as Record<string, unknown>).aliases as unknown[]).filter((value): value is string => typeof value === 'string')
-        : undefined,
-      args,
-      columns: cliDef.columns,
-      pipeline: cliDef.pipeline,
-      timeout: cliDef.timeout,
-      deprecated: (cliDef as Record<string, unknown>).deprecated as boolean | string | undefined,
-      replacedBy: (cliDef as Record<string, unknown>).replacedBy as string | undefined,
-      type: 'yaml',
-      sourceFile: path.relative(CLIS_DIR, filePath),
-      navigateBefore: cliDef.navigateBefore,
-    };
-  } catch (err) {
-    process.stderr.write(`Warning: failed to parse ${filePath}: ${getErrorMessage(err)}\n`);
-    return null;
-  }
-}
-
-export async function loadTsManifestEntries(
+export async function loadManifestEntries(
   filePath: string,
   site: string,
   importer: (moduleHref: string) => Promise<unknown> = moduleHref => import(moduleHref),
@@ -160,22 +115,26 @@ export async function loadTsManifestEntries(
     // Helper/test modules should not appear as CLI commands in the manifest.
     if (!CLI_MODULE_PATTERN.test(src)) return [];
 
-    const modulePath = toTsModulePath(filePath, site);
+    const modulePath = toModulePath(filePath, site);
     const registry = getRegistry();
     const before = new Map(registry.entries());
     const mod = await importer(pathToFileURL(filePath).href);
 
     const exportedCommands = Object.values(isRecord(mod) ? mod : {})
-      .filter(value => isCliCommandValue(value));
+      .filter(value => isCliCommandValue(value, site));
 
     const runtimeCommands = exportedCommands.length > 0
       ? exportedCommands
       : [...registry.entries()]
         .filter(([key, cmd]) => {
+          if (cmd.site !== site) return false;
           const previous = before.get(key);
           return !previous || previous !== cmd;
         })
         .map(([, cmd]) => cmd);
+
+    // Resolve sourceFile relative to clis/.
+    const sourceRelative = path.relative(CLIS_DIR, filePath);
 
     const seen = new Set<string>();
     return runtimeCommands
@@ -186,7 +145,7 @@ export async function loadTsManifestEntries(
         return true;
       })
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map(cmd => toManifestEntry(cmd, modulePath, path.relative(CLIS_DIR, filePath)));
+      .map(cmd => toManifestEntry(cmd, modulePath, sourceRelative));
   } catch (err) {
     // If parsing fails, log a warning (matching scanYaml behaviour) and skip the entry.
     process.stderr.write(`Warning: failed to scan ${filePath}: ${getErrorMessage(err)}\n`);
@@ -194,77 +153,21 @@ export async function loadTsManifestEntries(
   }
 }
 
-/**
- * When both YAML and TS adapters exist for the same site/name,
- * prefer the TS version (it self-registers and typically has richer logic).
- */
-export function shouldReplaceManifestEntry(current: ManifestEntry, next: ManifestEntry): boolean {
-  if (current.type === next.type) return false;
-  return current.type === 'yaml' && next.type === 'ts';
-}
-
 export async function buildManifest(): Promise<ManifestEntry[]> {
   const manifest = new Map<string, ManifestEntry>();
 
+  // Scan JS adapters directly from clis/.
+  // Adapters are now JS-first — no compilation step needed.
   if (fs.existsSync(CLIS_DIR)) {
     for (const site of fs.readdirSync(CLIS_DIR)) {
       const siteDir = path.join(CLIS_DIR, site);
       if (!fs.statSync(siteDir).isDirectory()) continue;
       for (const file of fs.readdirSync(siteDir)) {
-        const filePath = path.join(siteDir, file);
-        if (file.endsWith('.yaml') || file.endsWith('.yml')) {
-          const entry = scanYaml(filePath, site);
-          if (entry) {
-            const key = `${entry.site}/${entry.name}`;
-            const existing = manifest.get(key);
-            if (!existing || shouldReplaceManifestEntry(existing, entry)) {
-              if (existing && existing.type !== entry.type) {
-                process.stderr.write(`⚠️  Duplicate adapter ${key}: ${existing.type} superseded by ${entry.type}\n`);
-              }
-              manifest.set(key, entry);
-            }
-          }
-        } else if (
-          (file.endsWith('.ts') && !file.endsWith('.d.ts') && !file.endsWith('.test.ts') && file !== 'index.ts') ||
-          (file.endsWith('.js') && !file.endsWith('.d.js') && !file.endsWith('.test.js') && file !== 'index.js')
-        ) {
-          const entries = await loadTsManifestEntries(filePath, site);
+        if (file.endsWith('.js') && !file.endsWith('.d.js') && !file.endsWith('.test.js') && file !== 'index.js') {
+          const filePath = path.join(siteDir, file);
+          const entries = await loadManifestEntries(filePath, site);
           for (const entry of entries) {
             const key = `${entry.site}/${entry.name}`;
-            const existing = manifest.get(key);
-            if (!existing || shouldReplaceManifestEntry(existing, entry)) {
-              if (existing && existing.type !== entry.type) {
-                process.stderr.write(`⚠️  Duplicate adapter ${key}: ${existing.type} superseded by ${entry.type}\n`);
-              }
-              manifest.set(key, entry);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Also scan src/clis/ for TS files that have dependencies (utils.ts etc.)
-  // These can't live in clis/ because import paths wouldn't resolve during build.
-  if (fs.existsSync(SRC_CLIS_DIR)) {
-    for (const site of fs.readdirSync(SRC_CLIS_DIR)) {
-      const siteDir = path.join(SRC_CLIS_DIR, site);
-      if (!fs.statSync(siteDir).isDirectory()) continue;
-      // Skip if already found in clis/ as TS (clis/ TS takes priority).
-      // Don't skip just because YAML exists — YAML may cover a different command set.
-      const clisSiteDir = path.join(CLIS_DIR, site);
-      if (fs.existsSync(clisSiteDir) && fs.readdirSync(clisSiteDir).some(f => f.endsWith('.ts') && !f.endsWith('.d.ts'))) continue;
-      for (const file of fs.readdirSync(siteDir)) {
-        if (!file.endsWith('.ts') || file.endsWith('.d.ts') || file.endsWith('.test.ts') || file === 'index.ts') continue;
-        const filePath = path.join(siteDir, file);
-        // Use dist/src/clis/ compiled JS for import (resolves all paths correctly)
-        const compiledPath = path.join(PACKAGE_ROOT, 'dist', 'src', 'clis', site, file.replace(/\.ts$/, '.js'));
-        const importPath = fs.existsSync(compiledPath) ? compiledPath : filePath;
-        const entries = await loadTsManifestEntries(importPath, site);
-        for (const entry of entries) {
-          const key = `${entry.site}/${entry.name}`;
-          const existing = manifest.get(key);
-          if (!existing || shouldReplaceManifestEntry(existing, entry)) {
             manifest.set(key, entry);
           }
         }
@@ -280,9 +183,7 @@ async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(OUTPUT), { recursive: true });
   fs.writeFileSync(OUTPUT, JSON.stringify(manifest, null, 2));
 
-  const yamlCount = manifest.filter(e => e.type === 'yaml').length;
-  const tsCount = manifest.filter(e => e.type === 'ts').length;
-  console.log(`✅ Manifest compiled: ${manifest.length} entries (${yamlCount} YAML, ${tsCount} TS) → ${OUTPUT}`);
+  console.log(`✅ Manifest compiled: ${manifest.length} entries → ${OUTPUT}`);
 
   // Restore executable permissions on bin entries.
   // tsc does not preserve the +x bit, so after a clean rebuild the CLI
